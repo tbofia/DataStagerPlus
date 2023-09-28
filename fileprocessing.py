@@ -14,12 +14,11 @@ def getdbconnection(server, database, rdms, usr, pwd):
     # Set up the SQL Server connection
 
     if rdms == 'MSSQL':
-        connectionstring = 'mssql+pyodbc://{}/{}?driver=ODBC+Driver+17+for+SQL+Server'
+        connectionstring = 'mssql+pyodbc://{}/{}?driver=ODBC+Driver+17+for+SQL+Server?trusted_connection=yes'
         connectionstring = connectionstring.format(server, database)
     if rdms == 'postgres':
         connectionstring = 'postgresql+psycopg2://{}:{}@{}:5432/{}'
-        connectionstring = connectionstring.format(usr, pwd, server, database)
-        
+        connectionstring = connectionstring.format(usr, pwd, server, database)  
 
     try:
         engine = sqlalchemy.create_engine(connectionstring)
@@ -39,10 +38,10 @@ def prep_file(file_path):
     # Load the file into a Pandas DataFrame
     if file_extension == '.csv':
         delimiter = ','
-        df_object = pd.read_csv(file_path, delimiter=delimiter, low_memory=False)
+        df_object = pd.read_csv(file_path, sep=delimiter, low_memory=False, encoding='unicode_escape')
     elif file_extension == '.txt':
         delimiter = '\t'
-        df_object = pd.read_csv(file_path, delimiter=delimiter, low_memory=False)
+        df_object = pd.read_csv(file_path, sep=delimiter, low_memory=False, encoding='unicode_escape')
     elif file_extension == '.xlsx':
         df_object = pd.read_excel(file_path)
     elif file_extension == '.json':

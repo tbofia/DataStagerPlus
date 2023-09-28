@@ -65,7 +65,7 @@ if __name__ == "__main__":
     # get information from configuration file.
     config = configparser.ConfigParser()
     config.read('setting.cfg')
-    targetserver = config['DATABASE_SERVER']['SERVER']
+    targetserver = urllib.parse.quote(config['DATABASE_SERVER']['SERVER'])
     targetdatabase = config['DATABASE_SERVER']['DATABASE']
     rdms = config['DATABASE_SERVER']['RDMS']
     user = config['DATABASE_SERVER']['USER']
