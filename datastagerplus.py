@@ -7,9 +7,10 @@ import threading
 import pandas as pd
 import configparser
 import urllib.parse
+import json
 
 
-def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd, project):
+def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd, project, filetypes):
     logging.warning("Thread %s: starting", thread)
     engine = fileprocessing.getdbconnection(server
                                             , database
@@ -24,7 +25,11 @@ def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd
             error_folder = os.path.dirname(dir_path) + '\\error\\'
             target_table = str(os.path.basename(os.path.dirname(dir_path))).upper()
 
-            df = fileprocessing.prep_file(file)  # process file i.e. read into dataframe
+            # Check that file is not being used (in flight...)
+            if len(fileprocessing.check_file_status(file)) > 0:
+                continue
+
+            df = fileprocessing.prep_file(file,filetypes)  # process file i.e. read into dataframe
             if isinstance(df, pd.DataFrame):  # if a dataframe was returned
                 status = fileprocessing.write_profile_data(df
                                                            , file
@@ -72,6 +77,7 @@ if __name__ == "__main__":
     password = urllib.parse.quote(config['DATABASE_SERVER']['PASSWORD'])
     monitor_folder = config['FILE_PATH']['ROOTDROPFOLDER']
     project_name = config['DATALOADX_PROJECT']['PROJECT_NAME']
+    file_types = json.loads(config['FILE_DELIMITERS']['FILETYPES'])
 
     while True:
         # Check all active threads
@@ -103,7 +109,8 @@ if __name__ == "__main__":
                                                       rdms,
                                                       user,
                                                       password,
-                                                      project_name,))
+                                                      project_name,
+                                                      file_types,))
                 folderthread.start()
 
         time.sleep(5)  # Wait for 5 minutes before checking for new files
