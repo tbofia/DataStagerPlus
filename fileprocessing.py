@@ -182,7 +182,7 @@ def error_file(file_path, error_path):
 
 # This function will tell us if file is being used. This is to make sure that we dont process files that are still being writen (Created)
 def check_file_status(file_path):
-
+    """
     class IO_STATUS_BLOCK(ctypes.Structure):
         class _STATUS(ctypes.Union):
             _fields_ = (('Status', wintypes.LONG),
@@ -258,5 +258,7 @@ def check_file_status(file_path):
                                         ctypes.sizeof(info),
                                         FileProcessIdsUsingFileInformation)
     pidList = info.ProcessIdList[0:info.NumberOfProcessIdsInList]
+    """
+    pidList = []
 
     return pidList
