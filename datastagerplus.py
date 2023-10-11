@@ -8,9 +8,10 @@ import pandas as pd
 import configparser
 import urllib.parse
 import json
+import queue
 
 
-def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd, project, filetypes):
+def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd, project, filetypes, objectexists):
     logging.warning("Thread %s: starting", thread)
     engine = fileprocessing.getdbconnection(server
                                             , database
@@ -63,6 +64,11 @@ def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd
 
     time.sleep(120) # wait 2 minutes before dispose of connection, give some time for archiving
     engine.dispose()
+
+    # if this a new table, free up new table queue for next new table
+    if not objectexists:
+        newtablequeue.get()
+        
     logging.warning("Thread %s: Ending", thread)
 
 
@@ -78,6 +84,8 @@ if __name__ == "__main__":
     monitor_folder = config['FILE_PATH']['ROOTDROPFOLDER']
     project_name = config['DATALOADX_PROJECT']['PROJECT_NAME']
     file_types = json.loads(config['FILE_DELIMITERS']['FILETYPES'])
+
+    newtablequeue = queue.Queue()
 
     while True:
         # Check all active threads
@@ -97,9 +105,20 @@ if __name__ == "__main__":
                   and (dir_root.count(os.path.sep) == 2))
                   and len(file_list) != 0)
                   and str(os.path.basename(os.path.dirname(dir_root))) not in active_threads):
-                # We are naming the thread with folder name (So we should have only one thread per folder)
+                      
+                # If table does not exist, put it in new tables queue, we will only create one new table at a time
+                tableexist = fileprocessing.check_table_exists(dir_root, targetserver, targetdatabase)
 
+                # We are naming the thread with folder name (So we should have only one thread per folder)
                 threadname = str(os.path.basename(os.path.dirname(dir_root)))
+
+                # If it is new table, and we are currently not processing a new table, put in queue
+                if not tableexist and newtablequeue.empty():
+                    newtablequeue.put(threadname)
+                # if it is new table, and we are currently processing a new table, then skip and continue
+                elif not newtablequeue.empty() and not tableexist:
+                    continue
+                    
                 folderthread = threading.Thread(target=process_folder_files,
                                                 name=threadname,
                                                 args=(threadname,
@@ -110,7 +129,8 @@ if __name__ == "__main__":
                                                       user,
                                                       password,
                                                       project_name,
-                                                      file_types,))
+                                                      file_types,
+                                                      tableexist,))
                 folderthread.start()
 
         time.sleep(5)  # Wait for 5 minutes before checking for new files
