@@ -160,7 +160,21 @@ def set_file_processed_status(profile_hk, engine):
     except Exception as e:
         logging.error('An exception occurred: %s', e)
         conn.close()
+        
+# Check if given table exixts        
+def check_table_exists(file_path, server, database):
 
+    engine = getdbconnection(server, database)
+
+    targettable = str(os.path.basename(os.path.dirname(file_path))).upper()
+    conn = engine.connect()
+    tablelist = conn.execute(sqlalchemy.text("SELECT TABLE_NAME "
+                                             "FROM INFORMATION_SCHEMA.TABLES "
+                                             "WHERE TABLE_SCHEMA = 'dbo'"
+                                             "AND TABLE_NAME=:id"), {'id': targettable}).fetchall()
+    conn.close()
+    return len(tablelist) > 0
+    
 # Archive given file by moving to different location
 def archive_file(file_path, archive_path):
     # Archive the file by moving it to the archive folder
