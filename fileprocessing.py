@@ -162,9 +162,9 @@ def set_file_processed_status(profile_hk, engine):
         conn.close()
         
 # Check if given table exixts        
-def check_table_exists(file_path, server, database):
+def check_table_exists(file_path, server, database, rdms, usr, pwd):
 
-    engine = getdbconnection(server, database)
+    engine = getdbconnection(server, database, rdms, usr, pwd)
 
     targettable = str(os.path.basename(os.path.dirname(file_path))).upper()
     conn = engine.connect()
