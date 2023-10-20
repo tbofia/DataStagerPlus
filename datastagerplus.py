@@ -87,6 +87,7 @@ if __name__ == "__main__":
 
     newtablequeue = queue.Queue()
 
+
     while True:
         # Check all active threads
         active_threads = []
@@ -107,7 +108,7 @@ if __name__ == "__main__":
                   and str(os.path.basename(os.path.dirname(dir_root))) not in active_threads):
                       
                 # If table does not exist, put it in new tables queue, we will only create one new table at a time
-                tableexist = fileprocessing.check_table_exists(dir_root, targetserver, targetdatabase)
+                tableexist = fileprocessing.check_table_exists(dir_root, targetserver, targetdatabase, rdms, user, password)
 
                 # We are naming the thread with folder name (So we should have only one thread per folder)
                 threadname = str(os.path.basename(os.path.dirname(dir_root)))
