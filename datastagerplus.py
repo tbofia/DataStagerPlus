@@ -11,7 +11,7 @@ import json
 import queue
 
 
-def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd, project, filetypes, objectexists):
+def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd, objectexists):
     logging.warning("Thread %s: starting", thread)
     engine = fileprocessing.getdbconnection(server
                                             , database
@@ -30,9 +30,13 @@ def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd
             if len(fileprocessing.check_file_status(file)) > 0:
                 continue
 
-            df = fileprocessing.prep_file(file,filetypes)  # process file i.e. read into dataframe
+            data_object = fileprocessing.prep_file(file)
+            df = data_object[0]  # process file i.e. read into dataframe
+            delimiter = data_object[1]
+            
             if isinstance(df, pd.DataFrame):  # if a dataframe was returned
                 status = fileprocessing.write_profile_data(df
+                                                           , delimiter
                                                            , file
                                                            , target_table
                                                            , engine
@@ -82,8 +86,6 @@ if __name__ == "__main__":
     user = config['DATABASE_SERVER']['USER']
     password = urllib.parse.quote(config['DATABASE_SERVER']['PASSWORD'])
     monitor_folder = config['FILE_PATH']['ROOTDROPFOLDER']
-    project_name = config['DATALOADX_PROJECT']['PROJECT_NAME']
-    file_types = json.loads(config['FILE_DELIMITERS']['FILETYPES'])
 
     newtablequeue = queue.Queue()
 
@@ -129,8 +131,6 @@ if __name__ == "__main__":
                                                       rdms,
                                                       user,
                                                       password,
-                                                      project_name,
-                                                      file_types,
                                                       tableexist,))
                 folderthread.start()
 
