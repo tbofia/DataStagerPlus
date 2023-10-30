@@ -1,18 +1,18 @@
 -- MSSQL
 CREATE TABLE [admin].[datastagerpluslog](
-	[dataprofilingid] [int] IDENTITY NOT NULL,
-	[datastagerplushk] [CHAR](32) NOT NULL,
-	[datastagerplusproject] [CHAR](32) NOT NULL,
-	[filename] [nvarchar](255) NULL,
-	[targettablename] [varchar](255) NULL,
-	[numberofcolumns] [int] NULL,
-	[totalrecords] [int] NULL,
-	[duplicaterecords] [int] NULL,
-	[invalidcharactersrecords] [int] NULL,
-	[loadsuccessstatus] [int] NOT NULL,
-	[filecreatetime] [datetime] NOT NULL,
-	[loadstarttime] [datetime] NOT NULL,
-	[loadendtime] [datetime]  NULL
+	[DataProfilingID] [int] IDENTITY NOT NULL,
+	[DataloadXHK] [CHAR](32) NOT NULL,
+	[Filename] [nvarchar](255) NULL,
+	[Delimiter] VARCHAR(5) NULL,
+	[TargetTableName] [varchar](255) NULL,
+	[NumberOfColumns] [int] NULL,
+	[TotalRecords] [int] NULL,
+	[DuplicateRecords] [int] NULL,
+	[InvalidCharactersRecords] [int] NULL,
+	[LoadSuccessStatus] [int] NOT NULL,
+	[FileCreateTime] [datetime] NOT NULL,
+	[LoadStartTime] [datetime] NOT NULL,
+	[LoadEndTime] [datetime]  NULL,
 )
 GO
 
