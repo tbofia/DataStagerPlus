@@ -63,7 +63,7 @@ def prep_file(file_path):
     return [df_object, delimiter]
 
 # This function creates a profile in the log table for the dataframe, returns a list of hashkey,success status and errors if any.
-def write_profile_data(df_object, file_path, table_name, engine, project_name):
+def write_profile_data(df_object, delimiter, file_path, table_name, engine, project_name):
     ret_val = []
     # Perform data profiling
     file_name = os.path.basename(file_path)
@@ -79,8 +79,8 @@ def write_profile_data(df_object, file_path, table_name, engine, project_name):
 
     profiling_entry = {
         'datastagerplushk': hashed_var,
-        'datastagerplusproject': project_name,
         'filename': file_name,
+        'delimiter': delimiter,
         'targettablename': table_name,
         'numberofcolumns': len(df_object.columns),
         'totalrecords': len(df_object),
