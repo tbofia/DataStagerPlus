@@ -22,8 +22,8 @@ def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd
 
     for file in files:
         if os.path.isfile(file):
-            archive_folder = os.path.dirname(dir_path) + '\\archive\\'  # get parent directory of 'drop'
-            error_folder = os.path.dirname(dir_path) + '\\error\\'
+            archive_folder = os.path.dirname(dir_path) + '/archive/'  # get parent directory of 'drop'
+            error_folder = os.path.dirname(dir_path) + '/error/'
             target_table = str(os.path.basename(os.path.dirname(dir_path))).upper()
 
             # Check that file is not being used (in flight...)
