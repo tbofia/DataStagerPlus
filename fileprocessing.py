@@ -10,6 +10,7 @@ from datetime import datetime
 import hashlib
 import ctypes
 from ctypes import wintypes
+import csv
 
 # this function returns a database engine based on config file
 def getdbconnection(server, database, rdms, usr, pwd):
@@ -32,14 +33,18 @@ def getdbconnection(server, database, rdms, usr, pwd):
     return engine
 
 # this functions returns a dataframe from data at a particular file path, appropiate funstion will be called based on file extention
-def prep_file(file_path,file_types):
+def prep_file(file_path):
     # Determine file extension
     file_extension = os.path.splitext(file_path)[1].lower()
-    df_object = pd.DataFrame()
 
     # Load the file into a Pandas DataFrame
-    if file_extension.replace('.','') in (file_types.keys()):
-        df_object = pd.read_csv(file_path, sep=file_types[file_extension.replace('.','')], low_memory=False, encoding='unicode_escape')
+    df_object = pd.DataFrame()
+    delimiter = None
+
+    if file_extension in ['.csv', '.txt']:
+        with open(file_path, 'r') as file:
+            delimiter = str(csv.Sniffer().sniff(file.read()).delimiter)
+        df_object = pd.read_csv(file_path, sep=delimiter, low_memory=False, encoding='unicode_escape')
     elif file_extension == '.xlsx':
         df_object = pd.read_excel(file_path)
     elif file_extension == '.json':
@@ -47,14 +52,15 @@ def prep_file(file_path,file_types):
     elif file_extension == '.xml':
         df_object = pd.read_xml(file_path)
     else:
+        print(f"Unsupported file format: {file_extension}")
         df_object = -1
 
     # Add load_datetime and filename columns to the start of DataFrame
     if isinstance(df_object, pd.DataFrame):
-        df_object.insert(0,'load_datetime',datetime.now())
-        df_object.insert(0,'filename',os.path.basename(file_path))
+        df_object.insert(0, 'load_datetime', datetime.now())
+        df_object.insert(0, 'filename', os.path.basename(file_path))
 
-    return df_object
+    return [df_object, delimiter]
 
 # This function creates a profile in the log table for the dataframe, returns a list of hashkey,success status and errors if any.
 def write_profile_data(df_object, file_path, table_name, engine, project_name):
