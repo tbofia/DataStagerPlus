@@ -39,8 +39,7 @@ def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd
                                                            , delimiter
                                                            , file
                                                            , target_table
-                                                           , engine
-                                                           , project)  # write date profile
+                                                           , engine)  # write date profile
                 profile_hk = status[0]
                 if status[1] == 1:  # if profile was not written skip this file
                     continue
