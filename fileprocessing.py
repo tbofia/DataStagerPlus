@@ -23,15 +23,12 @@ def getdbconnection(server, database, connectiontype, rdms, usr, pwd):
 
     if rdms == 'MSSQL':
         if connectiontype == 'ODBC':
-            connectionstring = 'mssql+pyodbc://{}'
-            connectionstring = connectionstring.format(server)
+            connectionstring = 'mssql+pyodbc://{}'.format(server)
         else:
-            connectionstring = 'mssql+pyodbc://{}/{}?driver=ODBC+Driver+17+for+SQL+Server?trusted_connection=yes'
-            connectionstring = connectionstring.format(server, database)
+            connectionstring = 'mssql+pyodbc://{}/{}?driver=ODBC+Driver+17+for+SQL+Server?trusted_connection=yes'.format(server, database)
 
     if rdms == 'postgres':
-        connectionstring = 'postgresql+psycopg2://{}:{}@{}:5432/{}'
-        connectionstring = connectionstring.format(usr, pwd, server, database)  
+        connectionstring = 'postgresql+psycopg2://{}:{}@{}:5432/{}'.format(usr, pwd, server, database)  
 
     try:
         engine = sqlalchemy.create_engine(connectionstring, fast_executemany=True)
@@ -90,7 +87,8 @@ def prep_file(file_path,supported_delimiters):
         try:
             if size_in_gb <= 0.25:
                 with open(file_path, 'r') as file:
-                    delimiter = str(csv.Sniffer().sniff(file.read()).delimiter)
+                    delimiter = usedefaultdelimiter(file_path,supported_delimiters)
+                    # delimiter = str(csv.Sniffer().sniff(file.read()).delimiter)
             else:
                 delimiter = usedefaultdelimiter(file_path,supported_delimiters)
         except:
@@ -275,7 +273,7 @@ def set_file_processed_status(profile_hk, engine):
         conn.close()
         
 # Check if given table exixts        
-def check_table_exists(dir_root, server, database, connectiontype, rdms, usr, pwd):
+def check_table_exists(dir_root, server, database, schema_name, connectiontype, rdms, usr, pwd):
 
     connection = getdbconnection(server, database, connectiontype, rdms, usr, pwd)
     engine = connection[0]
@@ -284,8 +282,8 @@ def check_table_exists(dir_root, server, database, connectiontype, rdms, usr, pw
     conn = engine.connect()
     tablelist = conn.execute(sqlalchemy.text("SELECT TABLE_NAME "
                                              "FROM INFORMATION_SCHEMA.TABLES "
-                                             "WHERE TABLE_SCHEMA = 'dbo'"
-                                             "AND TABLE_NAME=:id"), {'id': targettable}).fetchall()
+                                             "WHERE TABLE_SCHEMA =:schema "
+                                             "AND TABLE_NAME=:id"), {'id': targettable,'schema':schema_name}).fetchall()
     conn.close()
     return len(tablelist) > 0
     
