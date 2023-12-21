@@ -3,48 +3,108 @@ import logging
 import os
 import time
 import pandas as pd
+import dask.dataframe as dd
 import shutil
 import pyodbc
 import sqlalchemy
-from datetime import datetime
 import hashlib
 import ctypes
-from ctypes import wintypes
 import csv
+import urllib.parse
+
+from ctypes import wintypes
+from pathlib import Path
+from datetime import datetime
+
 
 # this function returns a database engine based on config file
-def getdbconnection(server, database, rdms, usr, pwd):
+def getdbconnection(server, database, connectiontype, rdms, usr, pwd):
     # Set up the SQL Server connection
 
     if rdms == 'MSSQL':
-        connectionstring = 'mssql+pyodbc://{}/{}?driver=ODBC+Driver+17+for+SQL+Server?trusted_connection=yes'
-        connectionstring = connectionstring.format(server, database)
+        if connectiontype == 'ODBC':
+            connectionstring = 'mssql+pyodbc://{}'
+            connectionstring = connectionstring.format(server)
+        else:
+            connectionstring = 'mssql+pyodbc://{}/{}?driver=ODBC+Driver+17+for+SQL+Server?trusted_connection=yes'
+            connectionstring = connectionstring.format(server, database)
+
     if rdms == 'postgres':
         connectionstring = 'postgresql+psycopg2://{}:{}@{}:5432/{}'
         connectionstring = connectionstring.format(usr, pwd, server, database)  
 
     try:
-        engine = sqlalchemy.create_engine(connectionstring)
+        engine = sqlalchemy.create_engine(connectionstring, fast_executemany=True)
 
     except Exception as e:
         logging.error('An exception occurred: %s', e)
         engine = None
 
-    return engine
+    return [engine,connectionstring]
+
+# This function tries to figure out delimiter for files by looking at couple of lines
+def usedefaultdelimiter(file_path,supported_delimiters):
+    default = '\t'
+    with open(file_path, 'r') as file:
+        sample_lines = file.readlines()[0:5]
+
+    first_line = sample_lines[1]
+
+    for delimiter in supported_delimiters:
+        delimiter = urllib.parse.unquote(delimiter)
+        match = 0
+        column_count = len(first_line.split(delimiter))
+        number_of_lines = len(sample_lines)-1
+        for line in sample_lines[1:5]:
+            if len(line.split(delimiter)) == column_count:
+                   match += 1
+        if match ==  number_of_lines and column_count > 1:
+            return delimiter
+    return default
+
+
 
 # this functions returns a dataframe from data at a particular file path, appropiate funstion will be called based on file extention
-def prep_file(file_path):
+def prep_file(file_path,supported_delimiters):
+    # Start of process
+    profiling_start_time = datetime.now()
+
     # Determine file extension
     file_extension = os.path.splitext(file_path)[1].lower()
 
     # Load the file into a Pandas DataFrame
     df_object = pd.DataFrame()
     delimiter = None
+    is_dask = False
+    numberofpartitions = 0
 
-    if file_extension in ['.csv', '.txt']:
-        with open(file_path, 'r') as file:
-            delimiter = str(csv.Sniffer().sniff(file.read()).delimiter)
-        df_object = pd.read_csv(file_path, sep=delimiter, low_memory=False, encoding='unicode_escape')
+    # Get file size in gb
+    byte=Path(file_path).stat().st_size
+    size_in_gb = byte/(1024 * 1024 * 1024)
+    size_in_mb = byte/(1024 * 1024)
+
+    # Get number of partitions in chunks of 100mb
+    numberofpartitions = int((size_in_mb//100)+1)
+
+    if file_extension in ['.csv', '.txt','.dat']:
+        try:
+            if size_in_gb <= 0.25:
+                with open(file_path, 'r') as file:
+                    delimiter = str(csv.Sniffer().sniff(file.read()).delimiter)
+            else:
+                delimiter = usedefaultdelimiter(file_path,supported_delimiters)
+        except:
+            delimiter = usedefaultdelimiter(file_path,supported_delimiters)
+        
+        # use dask dataframe for files larger that 0.5 gb
+        if (1==0):
+            df_object = dd.read_csv(file_path, sep=delimiter, encoding='unicode_escape', skipinitialspace = True, low_memory=False)
+            is_dask = True
+            
+        else:
+            df_object = pd.read_csv(file_path, sep=delimiter, encoding='unicode_escape', skipinitialspace = True, low_memory=False)
+            
+
     elif file_extension == '.xlsx':
         df_object = pd.read_excel(file_path)
     elif file_extension == '.json':
@@ -55,15 +115,51 @@ def prep_file(file_path):
         print(f"Unsupported file format: {file_extension}")
         df_object = -1
 
-    # Add load_datetime and filename columns to the start of DataFrame
-    if isinstance(df_object, pd.DataFrame):
-        df_object.insert(0, 'load_datetime', datetime.now())
-        df_object.insert(0, 'filename', os.path.basename(file_path))
+    mod_object =  add_meta_data(df_object, delimiter, file_path, numberofpartitions, profiling_start_time)
 
-    return [df_object, delimiter]
+    df_object = mod_object[0]
+    meta_data = mod_object[1]
+
+    return [df_object, meta_data]
+
+# Add Meta Data columns
+def add_meta_data(df_object, delimiter, file_path, numberofpartitions, profiling_start_time):
+    file_name = os.path.basename(file_path)
+    profiling_end_time = datetime.now()
+    is_dask = False
+
+    profile_hk = file_name + str(profiling_end_time)
+    profile_hk = profile_hk.encode('utf-8')
+    profile_hk = hashlib.md5(profile_hk).hexdigest()
+
+    # Add load_datetime and filename columns to the start of DataFrame
+    if isinstance(df_object, dd.DataFrame):
+        df_object = df_object.compute()
+        is_dask = True
+
+    if isinstance(df_object, pd.DataFrame):
+        # Trim white spaces from all data in the DataFrame
+        df_object = df_object.map(lambda x: x.strip() if isinstance(x, str) else x)
+
+        # remove all extra spaces from column names
+        df_object = df_object.rename(columns=lambda x: x.strip())
+
+        df_object.insert(0, 'load_datetime', profiling_end_time)
+        df_object.insert(0, 'filename', file_name)
+        df_object.insert(0, 'datafilestagehk', profile_hk)
+
+    if is_dask: # Convert back to dask
+       df_object = dd.from_pandas(df_object, npartitions=numberofpartitions) 
+
+    meta_data = {'profiling_end_time':profiling_end_time,
+                 'profiling_start_time':profiling_start_time,
+                 'profile_hk':profile_hk,
+                 'delimiter':delimiter}
+
+    return [df_object, meta_data]
 
 # This function creates a profile in the log table for the dataframe, returns a list of hashkey,success status and errors if any.
-def write_profile_data(df_object, delimiter, file_path, table_name, engine):
+def write_profile_data(df_object, meta_data, file_path, table_name, schemaname, engine):
     ret_val = []
     # Perform data profiling
     file_name = os.path.basename(file_path)
@@ -71,31 +167,32 @@ def write_profile_data(df_object, delimiter, file_path, table_name, engine):
     t_obj = time.strptime(time.ctime(os.path.getmtime(file_path)))
     file_drop_time = time.strftime("%Y-%m-%d %H:%M:%S", t_obj)
 
-    profile_time = datetime.now()
-    profile_hk = file_name + str(profile_time)
-
-    profile_hk = profile_hk.encode('utf-8')
-    hashed_var = hashlib.md5(profile_hk).hexdigest()
+    if isinstance(df_object, pd.DataFrame):
+        duplicates = df_object.duplicated().sum()
+    else:
+        duplicates = None
 
     profiling_entry = {
-        'datastagerplushk': hashed_var,
+        'datafilestagehk': meta_data['profile_hk'],
         'filename': file_name,
-        'delimiter': delimiter,
+        'delimiter': meta_data['delimiter'],
         'targettablename': table_name,
-        'numberofcolumns': len(df_object.columns),
+        'schemaname':schemaname,
+        'numberofcolumns': len(df_object.columns)-2,
         'totalrecords': len(df_object),
-        'duplicaterecords': df_object.duplicated().sum(),
+        'duplicaterecords': duplicates,
         'invalidcharactersrecords': 0,
         'loadsuccessstatus': 0,
         'filecreatetime': datetime.strptime(file_drop_time, "%Y-%m-%d %H:%M:%S"),
-        'loadstarttime': profile_time
+        'loadstarttime': meta_data['profiling_start_time'],
+        'loadtomemoryendtime':meta_data['profiling_end_time']
     }
-    ret_val.append(hashed_var)
+
     try:
         # Insert data profiling details into the DataProfiling table
-        pd.DataFrame([profiling_entry]).to_sql('datastagerpluslog'
+        pd.DataFrame([profiling_entry]).to_sql('datafilestagelog'
                                                , con=engine
-                                               , schema='admin'
+                                               , schema='_admin'
                                                , if_exists='append'
                                                , index=False)
         ret_val.append(0)
@@ -107,20 +204,20 @@ def write_profile_data(df_object, delimiter, file_path, table_name, engine):
     return ret_val
 
 # This function write log into error log table. Called when we cant write dataframe or if dataframe not created. 
-def generate_error_log_entry(profile_hash, targettablename, error_message, engine):
+def generate_error_log_entry(profile_hk, targettablename, error_message, engine):
     # Insert log entry into the LoadLog table
     ret_val = []
     log_entry = {
-        'datastagerplushk': profile_hash,
+        'datafilestagehk': profile_hk,
         'targettablename': targettablename,
         'message': error_message,
         'errordatetime': datetime.now()
     }
 
     try:
-        pd.DataFrame([log_entry]).to_sql('datastagerpluserrorlog'
+        pd.DataFrame([log_entry]).to_sql('datafilestageerrorlog'
                                          , con=engine
-                                         , schema='admin'
+                                         , schema='_admin'
                                          , if_exists='append'
                                          , index=False)
         ret_val.append(0)
@@ -132,15 +229,25 @@ def generate_error_log_entry(profile_hash, targettablename, error_message, engin
     return ret_val
 
 # This function writes dataframe to target database table
-def load_data(df_object, file_path, targettablename, engine):
+def load_data(df_object, file_path, targettablename, schemaname, connection):
     ret_val = []
+
     try:
-        df_object.to_sql(targettablename
-                         , con=engine
-                         , schema='dbo'
+        if isinstance(df_object, pd.DataFrame):
+            df_object.to_sql(targettablename
+                         , con=connection[0]
+                         , schema=schemaname
                          , if_exists='append'
                          , index=False
                          , chunksize=10000)
+        else:
+            df_object.to_sql(targettablename
+                         , uri=connection[1]
+                         , schema=schemaname
+                         , if_exists='append'
+                         , index=False
+                         , chunksize=10000)
+
         print(f"File {file_path} successfully loaded into table {targettablename}")
         ret_val.append(0)
     except Exception as e:
@@ -157,9 +264,9 @@ def set_file_processed_status(profile_hk, engine):
 
     try:
         conn.execute(
-            sqlalchemy.text("UPDATE admin.datastagerpluslog "
+            sqlalchemy.text("UPDATE _admin.datafilestagelog "
                             "SET loadsuccessstatus=:loadstatus, loadendtime=:loadtime  "
-                            "WHERE datastagerplushk=:id"),
+                            "WHERE datafilestagehk=:id"),
             {'id': profile_hk, 'loadstatus': 1, 'loadtime': datetime.now()})
         conn.commit()
         conn.close()
@@ -168,11 +275,12 @@ def set_file_processed_status(profile_hk, engine):
         conn.close()
         
 # Check if given table exixts        
-def check_table_exists(file_path, server, database, rdms, usr, pwd):
+def check_table_exists(dir_root, server, database, connectiontype, rdms, usr, pwd):
 
-    engine = getdbconnection(server, database, rdms, usr, pwd)
+    connection = getdbconnection(server, database, connectiontype, rdms, usr, pwd)
+    engine = connection[0]
 
-    targettable = str(os.path.basename(os.path.dirname(file_path))).upper()
+    targettable = os.path.basename(dir_root).upper()
     conn = engine.connect()
     tablelist = conn.execute(sqlalchemy.text("SELECT TABLE_NAME "
                                              "FROM INFORMATION_SCHEMA.TABLES "
@@ -184,6 +292,9 @@ def check_table_exists(file_path, server, database, rdms, usr, pwd):
 # Archive given file by moving to different location
 def archive_file(file_path, archive_path):
     # Archive the file by moving it to the archive folder
+    if not os.path.exists(archive_path):
+        os.makedirs(archive_path)
+
     file_name = os.path.basename(file_path)
     archive_path = os.path.join(archive_path, file_name)
     shutil.move(file_path, archive_path)
@@ -192,93 +303,38 @@ def archive_file(file_path, archive_path):
 
 # Move file to error folder
 def error_file(file_path, error_path):
-    # Archive the file by moving it to the archive folder
+    # move error files to error folder
+    if not os.path.exists(error_path):
+        os.makedirs(error_path)
+
     file_name = os.path.basename(file_path)
     error_path = os.path.join(error_path, file_name)
     shutil.move(file_path, error_path)
 
     return
 
+# This code will check if file has already been loaded
+def is_file_loaded(file_name, target_table, server, database, connectiontype, rdms, usr, pwd):
+
+    connection = getdbconnection(server, database, connectiontype, rdms, usr, pwd)
+    engine = connection[0]
+
+    conn = engine.connect()
+    filelist = conn.execute(sqlalchemy.text("SELECT DISTINCT dataprofilingid "
+                                             "FROM _admin.datafilestagelog "
+                                             "WHERE filename=:file "
+                                             "AND targettablename=:targettable "
+                                             "AND loadsuccessstatus = 1"), {'targettable': target_table, 'file':file_name}).fetchall()
+    conn.close()
+    return len(filelist) > 0
+
 
 # This function will tell us if file is being used. This is to make sure that we dont process files that are still being writen (Created)
 def check_file_status(file_path):
-    """
-    class IO_STATUS_BLOCK(ctypes.Structure):
-        class _STATUS(ctypes.Union):
-            _fields_ = (('Status', wintypes.LONG),
-                        ('Pointer', wintypes.LPVOID))
-        _anonymous_ = '_Status',
-        _fields_ = (('_Status', _STATUS),
-                    ('Information', wintypes.WPARAM))
-        
-    class FILE_PROCESS_IDS_USING_FILE_INFORMATION(ctypes.Structure):
-        _fields_ = (('NumberOfProcessIdsInList', wintypes.LARGE_INTEGER),
-                    ('ProcessIdList', wintypes.LARGE_INTEGER * 64))
-        
-    # -----------------------------------------------------------------------------
-    # prepare data types for system call
-    # -----------------------------------------------------------------------------
+   try:
+       with open(file_path, 'r') as file: # If you can open the file without any exceptions, it's not open in write mode by another process.
+           val =  True
+   except PermissionError:
+       val = False
 
-    iosb = IO_STATUS_BLOCK()
-    info = FILE_PROCESS_IDS_USING_FILE_INFORMATION()
-        
-    # -----------------------------------------------------------------------------
-    # generic strings and constants
-    # -----------------------------------------------------------------------------
-
-    ntdll = ctypes.WinDLL('ntdll')
-    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-
-
-    INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
-    FILE_READ_ATTRIBUTES = 0x80
-    FILE_SHARE_READ = 1
-    OPEN_EXISTING = 3
-    FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
-
-    FILE_INFORMATION_CLASS = wintypes.ULONG
-    FileProcessIdsUsingFileInformation = 47
-
-    LPSECURITY_ATTRIBUTES = wintypes.LPVOID
-
-    # -----------------------------------------------------------------------------
-    # create handle on concerned file with dwDesiredAccess == FILE_READ_ATTRIBUTES
-    # -----------------------------------------------------------------------------
-
-    kernel32.CreateFileW.restype = wintypes.HANDLE
-    kernel32.CreateFileW.argtypes = (
-        wintypes.LPCWSTR,      # In     lpFileName
-        wintypes.DWORD,        # In     dwDesiredAccess
-        wintypes.DWORD,        # In     dwShareMode
-        LPSECURITY_ATTRIBUTES,  # In_opt lpSecurityAttributes
-        wintypes.DWORD,        # In     dwCreationDisposition
-        wintypes.DWORD,        # In     dwFlagsAndAttributes
-        wintypes.HANDLE)       # In_opt hTemplateFile
-    hFile = kernel32.CreateFileW(
-        file_path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, None, OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS, None)
-    if hFile == INVALID_HANDLE_VALUE:
-        raise ctypes.WinError(ctypes.get_last_error())
-
-
-    PIO_STATUS_BLOCK = ctypes.POINTER(IO_STATUS_BLOCK)
-    ntdll.NtQueryInformationFile.restype = wintypes.LONG
-    ntdll.NtQueryInformationFile.argtypes = (
-        wintypes.HANDLE,        # In  FileHandle
-        PIO_STATUS_BLOCK,       # Out IoStatusBlock
-        wintypes.LPVOID,        # Out FileInformation
-        wintypes.ULONG,         # In  Length
-        FILE_INFORMATION_CLASS)  # In  FileInformationClass
-
-    # -----------------------------------------------------------------------------
-    # system call to retrieve list of PIDs currently using the file
-    # -----------------------------------------------------------------------------
-    status = ntdll.NtQueryInformationFile(hFile, ctypes.byref(iosb),
-                                        ctypes.byref(info),
-                                        ctypes.sizeof(info),
-                                        FileProcessIdsUsingFileInformation)
-    pidList = info.ProcessIdList[0:info.NumberOfProcessIdsInList]
-    """
-    pidList = []
-
-    return pidList
+   return val
