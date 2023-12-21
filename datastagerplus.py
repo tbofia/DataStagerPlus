@@ -12,7 +12,7 @@ import json
 import queue
 
 # This function will be called in thread to process all files in a folder. So each folder will be processed in a different thread. Note here that each folder also maps to a single table.
-def process_folder_files(thread, monitor_folder, dir_path, supported_delimiters, server, database, connectiontype, rdms_name, usr, pwd, objectexists): 
+def process_folder_files(thread, monitor_folder, dir_path, supported_delimiters, server, database, schema_name, connectiontype, rdms_name, usr, pwd, objectexists): 
     logging.warning("Thread %s: starting", thread)
     connection = fileprocessing.getdbconnection(server
                                             , database
@@ -27,19 +27,25 @@ def process_folder_files(thread, monitor_folder, dir_path, supported_delimiters,
     # process each file into target table
     for file in files:
         if os.path.isfile(file):
-            file_name = os.path.basename(file)
-            schema_name = os.path.basename(os.path.dirname(dir_path))
 
+            file_name = os.path.basename(file)
             archive_folder = monitor_folder + '/archive/'+schema_name+'/'+str(os.path.basename(dir_path))+'/'
             error_folder = monitor_folder + '/error/'+schema_name+'/'+str(os.path.basename(dir_path))+'/'
-            target_table = str(os.path.basename(dir_path).upper())
+            target_table = str(os.path.basename(dir_path)).lower()
 
             # Check that file is not being used (in flight...)
             if not fileprocessing.check_file_status(file):
                 continue
 
             # Check that file is not already loaded
-            if fileprocessing.is_file_loaded(file_name, target_table, server, database, connectiontype, rdms_name, usr, pwd):
+            if fileprocessing.is_file_loaded(file_name
+                                             , target_table
+                                             , server
+                                             , database
+                                             , connectiontype
+                                             , rdms_name
+                                             , usr
+                                             , pwd):
                 fileprocessing.archive_file(file, archive_folder)  # Archive the file
                 continue
 
@@ -128,9 +134,17 @@ if __name__ == "__main__":
                   and (dir_root.count(os.path.sep) ==1)
                   and (len(file_list) != 0)
                   and str(os.path.basename(dir_root)) not in active_threads):
-                      
+                 
+                schema_name = os.path.basename(os.path.dirname(dir_root))
                 # If table does not exist, put it in new tables queue, we will only create one new table at a time
-                tableexist = fileprocessing.check_table_exists(dir_root, targetserver, targetdatabase, connectiontype, rdms, user, password)
+                tableexist = fileprocessing.check_table_exists(dir_root
+                                                               , targetserver
+                                                               , targetdatabase
+                                                               , schema_name
+                                                               , connectiontype
+                                                               , rdms
+                                                               , user
+                                                               , password)
 
                 # We are naming the thread with folder name (So we should have only one thread per folder)
                 threadname = os.path.basename(dir_root)
@@ -150,6 +164,7 @@ if __name__ == "__main__":
                                                       delimiters,
                                                       targetserver,
                                                       targetdatabase,
+                                                      schema_name,
                                                       connectiontype,
                                                       rdms,
                                                       user,
