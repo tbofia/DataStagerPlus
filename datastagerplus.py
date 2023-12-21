@@ -5,48 +5,65 @@ import glob
 import time
 import threading
 import pandas as pd
+import dask.dataframe as dd
 import configparser
 import urllib.parse
 import json
 import queue
 
-
-def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd, objectexists):
+# This function will be called in thread to process all files in a folder. So each folder will be processed in a different thread. Note here that each folder also maps to a single table.
+def process_folder_files(thread, monitor_folder, dir_path, supported_delimiters, server, database, connectiontype, rdms_name, usr, pwd, objectexists): 
     logging.warning("Thread %s: starting", thread)
-    engine = fileprocessing.getdbconnection(server
+    connection = fileprocessing.getdbconnection(server
                                             , database
+                                            , connectiontype
                                             , rdms_name
                                             , usr
                                             , pwd)
+    engine = connection[0]
+    # get list of files to process
     files = glob.glob(os.path.join(dir_path, '*'))
 
+    # process each file into target table
     for file in files:
         if os.path.isfile(file):
-            archive_folder = os.path.dirname(dir_path) + '/archive/'  # get parent directory of 'drop'
-            error_folder = os.path.dirname(dir_path) + '/error/'
-            target_table = str(os.path.basename(os.path.dirname(dir_path))).upper()
+            file_name = os.path.basename(file)
+            schema_name = os.path.basename(os.path.dirname(dir_path))
+
+            archive_folder = monitor_folder + '/archive/'+schema_name+'/'+str(os.path.basename(dir_path))+'/'
+            error_folder = monitor_folder + '/error/'+schema_name+'/'+str(os.path.basename(dir_path))+'/'
+            target_table = str(os.path.basename(dir_path).upper())
 
             # Check that file is not being used (in flight...)
-            if len(fileprocessing.check_file_status(file)) > 0:
+            if not fileprocessing.check_file_status(file):
                 continue
 
-            data_object = fileprocessing.prep_file(file)
+            # Check that file is not already loaded
+            if fileprocessing.is_file_loaded(file_name, target_table, server, database, connectiontype, rdms_name, usr, pwd):
+                fileprocessing.archive_file(file, archive_folder)  # Archive the file
+                continue
+
+            # Attemp to create panda from file and figure out the delimiter used in file
+            data_object = fileprocessing.prep_file(file, supported_delimiters)
             df = data_object[0]  # process file i.e. read into dataframe
-            delimiter = data_object[1]
+            meta_data = data_object[1]
+            profile_hk = meta_data['profile_hk']
             
-            if isinstance(df, pd.DataFrame):  # if a dataframe was returned
+            if isinstance(df, pd.DataFrame) or isinstance(df, dd.DataFrame):  # if a dataframe was returned
                 status = fileprocessing.write_profile_data(df
-                                                           , delimiter
+                                                           , meta_data
                                                            , file
                                                            , target_table
+                                                           , schema_name
                                                            , engine)  # write date profile
-                profile_hk = status[0]
-                if status[1] == 1:  # if profile was not written skip this file
+
+                if status[0] == 1:  # if profile was not written skip this file
                     continue
                 status = fileprocessing.load_data(df
                                                   , file
                                                   , target_table
-                                                  , engine)  # load data to target database
+                                                  , schema_name
+                                                  , connection)  # load data to target database
                 if status[0] == 1:  # if not able to load data, move file to error folder
                     status = fileprocessing.generate_error_log_entry(profile_hk
                                                                      , target_table
@@ -58,7 +75,6 @@ def process_folder_files(thread, dir_path, server, database, rdms_name, usr, pwd
                 fileprocessing.set_file_processed_status(profile_hk, engine)
             else:  # data was not processed into dataframe
                 message = 'Error reading file into a dataframe...Make sure format is supported.'
-                file_name = os.path.basename(file)
                 status = fileprocessing.generate_error_log_entry(file_name
                                                                  , target_table
                                                                  , message
@@ -81,11 +97,14 @@ if __name__ == "__main__":
     config.read('setting.cfg')
     targetserver = urllib.parse.quote(config['DATABASE_SERVER']['SERVER'])
     targetdatabase = config['DATABASE_SERVER']['DATABASE']
+    connectiontype = config['DATABASE_SERVER']['CONNECTIONTYPE'] 
     rdms = config['DATABASE_SERVER']['RDMS']
     user = config['DATABASE_SERVER']['USER']
     password = urllib.parse.quote(config['DATABASE_SERVER']['PASSWORD'])
-    monitor_folder = config['FILE_PATH']['ROOTDROPFOLDER']
+    watched_folder = config['FILE_PATH']['ROOTDROPFOLDER']
+    delimiters = urllib.parse.quote(config['SUPPORTED_DELIMITERS']['DELIMITERS'].strip()).split('~')
 
+    # This will be token used to determine which new table is in creation
     newtablequeue = queue.Queue()
 
 
@@ -94,25 +113,27 @@ if __name__ == "__main__":
         active_threads = []
         for active_thread in threading.enumerate():
             active_threads.append(active_thread.name)
+        
+        # If a drop folder does not exist exixt the program
+        drop_folder = watched_folder + '/drop/'
+        if not os.path.isdir(drop_folder):
+            break
 
-        # Monitor root folder and all sub folders and for each path check for files
-        for (dir_root, dir_name, file_list) in os.walk(monitor_folder):
-            # if the path is 'drop' folder
-            # and 'drop' folder not in root,
-            # and we are just one level deep from root ,
+        # Scan drop folder's first level folders for files
+        for (dir_root, dir_name, file_list) in os.walk(drop_folder):
+            # and we are just one level deep from drop folder,
             # and folder is not empty,
             # and folder is not currently being processed, start a thread to process files in the folder
-            if ((((os.path.basename(dir_root) == 'drop')
-                  and (monitor_folder != os.path.dirname(dir_root))
-                  and (dir_root.count(os.path.sep) == 2))
-                  and len(file_list) != 0)
-                  and str(os.path.basename(os.path.dirname(dir_root))) not in active_threads):
+            if ((drop_folder != dir_root)
+                  and (dir_root.count(os.path.sep) ==1)
+                  and (len(file_list) != 0)
+                  and str(os.path.basename(dir_root)) not in active_threads):
                       
                 # If table does not exist, put it in new tables queue, we will only create one new table at a time
-                tableexist = fileprocessing.check_table_exists(dir_root, targetserver, targetdatabase, rdms, user, password)
+                tableexist = fileprocessing.check_table_exists(dir_root, targetserver, targetdatabase, connectiontype, rdms, user, password)
 
                 # We are naming the thread with folder name (So we should have only one thread per folder)
-                threadname = str(os.path.basename(os.path.dirname(dir_root)))
+                threadname = os.path.basename(dir_root)
 
                 # If it is new table, and we are currently not processing a new table, put in queue
                 if not tableexist and newtablequeue.empty():
@@ -124,9 +145,12 @@ if __name__ == "__main__":
                 folderthread = threading.Thread(target=process_folder_files,
                                                 name=threadname,
                                                 args=(threadname,
+                                                      watched_folder,
                                                       dir_root,
+                                                      delimiters,
                                                       targetserver,
                                                       targetdatabase,
+                                                      connectiontype,
                                                       rdms,
                                                       user,
                                                       password,
