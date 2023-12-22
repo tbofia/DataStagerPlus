@@ -83,15 +83,22 @@ def prep_file(file_path,supported_delimiters):
     # Get number of partitions in chunks of 100mb
     numberofpartitions = int((size_in_mb//100)+1)
 
-    if file_extension in ['.csv', '.txt','.dat']:
+    if file_extension not in ['.xlsx', '.json','.xml']:
         try:
-            if size_in_gb <= 0.25:
-                with open(file_path, 'r') as file:
-                    delimiter = usedefaultdelimiter(file_path,supported_delimiters)
-                    # delimiter = str(csv.Sniffer().sniff(file.read()).delimiter)
-            else:
-                delimiter = usedefaultdelimiter(file_path,supported_delimiters)
+            # Sniffer functions is acting funny with big files, lets try to sniff just from the first 10 lines
+             temp_file = file_path+'.tmp'
+
+             with open(file_path, 'r') as file:
+                 lines = file.readlines()[:10]
+             with open(temp_file, 'w') as file:
+                 file.writelines(lines)
+             with open(temp_file, 'r') as file:
+                 delimiter = str(csv.Sniffer().sniff(file.read()).delimiter)
+
+             os.remove(temp_file)
+                
         except:
+            os.remove(temp_file)
             delimiter = usedefaultdelimiter(file_path,supported_delimiters)
         
         # use dask dataframe for files larger that 0.5 gb
