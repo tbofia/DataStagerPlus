@@ -237,22 +237,50 @@ def generate_error_log_entry(profile_hk, targettablename, error_message, engine)
 def load_data(df_object, file_path, targettablename, schemaname, connection):
     ret_val = []
 
+    file_name = os.path.splitext(os.path.basename(file_path))[0]
+    temp_table = targettablename + '_' + file_name
+    targettableexits = check_table_exists(targettablename, server, database)
+
+    # If this is first file for given table set up so that it is loaded directly
+    if not targettableexits:
+        temp_table = targettablename
+        
+    # If temp table for a file persists from last attempt, someone needs to delete manually
+    if check_table_exists(temp_table, server, database):
+        ret_val.append(2)
+
     try:
         if isinstance(df_object, pd.DataFrame):
-            df_object.to_sql(targettablename
+            df_object.to_sql(temp_table
                          , con=connection[0]
                          , schema=schemaname
                          , if_exists='append'
                          , index=False
                          , chunksize=10000)
         else:
-            df_object.to_sql(targettablename
+            df_object.to_sql(temp_table
                          , uri=connection[1]
                          , schema=schemaname
                          , if_exists='append'
                          , index=False
                          , chunksize=10000)
 
+        if targettableexits:
+            # Insert data from temp table to actual target table
+            insert_statement = "INSERT INTO dbo.{} SELECT * FROM dbo.[{}]".format(table_name, temp_table)
+            conn = engine.connect()
+            conn.execute(
+                sqlalchemy.text(insert_statement))
+            conn.commit()
+            conn.close()
+
+            # Drop temp table is insert was successful
+            drop_table = "DROP TABLE dbo.{}".format(temp_table)
+            conn = engine.connect()
+            conn.execute(
+                sqlalchemy.text(insert_statement))
+            conn.commit()
+            conn.close()
         print(f"File {file_path} successfully loaded into table {targettablename}")
         ret_val.append(0)
     except Exception as e:
@@ -279,13 +307,12 @@ def set_file_processed_status(profile_hk, engine):
         logging.error('An exception occurred: %s', e)
         conn.close()
         
-# Check if given table exixts        
-def check_table_exists(dir_root, server, database, schema_name, connectiontype, rdms, usr, pwd):
+# Check if given table exists        
+def check_table_exists(targettable, server, database, schema_name, connectiontype, rdms, usr, pwd):
 
     connection = getdbconnection(server, database, connectiontype, rdms, usr, pwd)
     engine = connection[0]
 
-    targettable = os.path.basename(dir_root).upper()
     conn = engine.connect()
     tablelist = conn.execute(sqlalchemy.text("SELECT TABLE_NAME "
                                              "FROM INFORMATION_SCHEMA.TABLES "
