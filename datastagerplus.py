@@ -77,6 +77,10 @@ def process_folder_files(thread, monitor_folder, dir_path, supported_delimiters,
                                                                      , engine)
                     fileprocessing.error_file(file, error_folder)
                     continue
+                # if previous file was not processed to schema or data issues skip the file
+                if status[0] == 2:  # if not able to load data, move file to error folder
+                    continue
+                    
                 fileprocessing.archive_file(file, archive_folder)  # Archive the file
                 fileprocessing.set_file_processed_status(profile_hk, engine)
             else:  # data was not processed into dataframe
@@ -134,10 +138,11 @@ if __name__ == "__main__":
                   and (dir_root.count(os.path.sep) ==1)
                   and (len(file_list) != 0)
                   and str(os.path.basename(dir_root)) not in active_threads):
-                 
+
+                targettable = str(os.path.basename(os.path.dirname(dir_root))).lower()
                 schema_name = os.path.basename(os.path.dirname(dir_root))
                 # If table does not exist, put it in new tables queue, we will only create one new table at a time
-                tableexist = fileprocessing.check_table_exists(dir_root
+                tableexist = fileprocessing.check_table_exists(targettable
                                                                , targetserver
                                                                , targetdatabase
                                                                , schema_name
