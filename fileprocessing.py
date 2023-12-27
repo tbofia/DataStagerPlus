@@ -39,6 +39,28 @@ def getdbconnection(server, database, connectiontype, rdms, usr, pwd):
 
     return [engine,connectionstring]
 
+# function to compare table shemas and return any differences
+def check_schema_differences(left_table, right_table, server, database):
+    result = None
+    if check_table_exists(left_table, server, database) and check_table_exists(right_table, server, database):
+        engine = getdbconnection(server, database)
+        conn = engine[0].connect()
+
+        result = conn.execute(sqlalchemy.text("SELECT A.COlUMN_NAME, A.ORDINAL_POSITION, A.DATA_TYPE "
+                                              "FROM "
+                                              "(SELECT COlUMN_NAME	,ORDINAL_POSITION 	,DATA_TYPE "
+                                              "FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{}') A "
+                                              "LEFT OUTER JOIN "
+                                              "(SELECT COlUMN_NAME	,ORDINAL_POSITION	,DATA_TYPE "
+                                              "FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{}') B "
+                                              "ON A.COLUMN_NAME = B.COLUMN_NAME "
+                                              "AND A.ORDINAL_POSITION = B.ORDINAL_POSITION "
+                                              "AND A.DATA_TYPE = B.DATA_TYPE "
+                                              "WHERE B.COLUMN_NAME IS NULL".format(left_table,
+                                                                                   right_table))).fetchall()
+
+    return result
+
 # This function tries to figure out delimiter for files by looking at couple of lines
 def usedefaultdelimiter(file_path,supported_delimiters):
     default = '\t'
