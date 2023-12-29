@@ -20,6 +20,8 @@ from datetime import datetime
 # this function returns a database engine based on config file
 def getdbconnection(server, database, connectiontype, rdms, usr, pwd):
     # Set up the SQL Server connection
+    connectionstring = None
+    engine = None
 
     if rdms == 'MSSQL':
         if connectiontype == 'ODBC':
@@ -34,17 +36,15 @@ def getdbconnection(server, database, connectiontype, rdms, usr, pwd):
         engine = sqlalchemy.create_engine(connectionstring, fast_executemany=True)
 
     except Exception as e:
-        logging.error('An exception occurred: %s', e)
-        engine = None
+        logging.error('An exception occurred while creating engine: %s', e)
 
     return [engine,connectionstring]
 
 # function to compare table shemas and return any differences
-def check_schema_differences(left_table, right_table, server, database):
+def check_schema_differences(left_table, right_table, table_schema, connection):
     result = None
-    if check_table_exists(left_table, server, database) and check_table_exists(right_table, server, database):
-        engine = getdbconnection(server, database)
-        conn = engine[0].connect()
+    if check_table_exists(left_table, table_schema, connection) and check_table_exists(right_table, table_schema, connection):
+        conn = connection[0].connect()
 
         result = conn.execute(sqlalchemy.text("SELECT A.COlUMN_NAME, A.ORDINAL_POSITION, A.DATA_TYPE "
                                               "FROM "
@@ -186,7 +186,7 @@ def add_meta_data(df_object, delimiter, file_path, numberofpartitions, profiling
     return [df_object, meta_data]
 
 # This function creates a profile in the log table for the dataframe, returns a list of hashkey,success status and errors if any.
-def write_profile_data(df_object, meta_data, file_path, table_name, schemaname, engine):
+def write_profile_data(df_object, meta_data, file_path, table_name, schemaname, connection):
     ret_val = []
     # Perform data profiling
     file_name = os.path.basename(file_path)
@@ -218,20 +218,20 @@ def write_profile_data(df_object, meta_data, file_path, table_name, schemaname, 
     try:
         # Insert data profiling details into the DataProfiling table
         pd.DataFrame([profiling_entry]).to_sql('datafilestagelog'
-                                               , con=engine
+                                               , con=connection[0]
                                                , schema='_admin'
                                                , if_exists='append'
                                                , index=False)
         ret_val.append(0)
     except Exception as e:
-        logging.error('An exception occurred: %s', e)
+        logging.error('An exception occurred while trying to create profile entry: %s', e)
         ret_val.append(1)
         ret_val.append(e)
 
     return ret_val
 
 # This function write log into error log table. Called when we cant write dataframe or if dataframe not created. 
-def generate_error_log_entry(profile_hk, targettablename, error_message, engine):
+def generate_error_log_entry(profile_hk, targettablename, error_message, connection):
     # Insert log entry into the LoadLog table
     ret_val = []
     log_entry = {
@@ -243,79 +243,25 @@ def generate_error_log_entry(profile_hk, targettablename, error_message, engine)
 
     try:
         pd.DataFrame([log_entry]).to_sql('datafilestageerrorlog'
-                                         , con=engine
+                                         , con=connection[0]
                                          , schema='_admin'
                                          , if_exists='append'
                                          , index=False)
         ret_val.append(0)
     except Exception as e:
-        logging.error('An exception occurred: %s', e)
+        logging.error('An exception occurred while trying to write to error log: %s', e)
         ret_val.append(1)
         ret_val.append(e)
 
     return ret_val
 
-# This function writes dataframe to target database table
-def load_data(df_object, file_path, targettablename, schemaname, connection):
-    ret_val = []
 
-    file_name = os.path.splitext(os.path.basename(file_path))[0]
-    temp_table = targettablename + '_' + file_name
-    targettableexits = check_table_exists(targettablename, server, database)
 
-    # If this is first file for given table set up so that it is loaded directly
-    if not targettableexits:
-        temp_table = targettablename
-        
-    # If temp table for a file persists from last attempt, someone needs to delete manually
-    if check_table_exists(temp_table, server, database):
-        ret_val.append(2)
-
-    try:
-        if isinstance(df_object, pd.DataFrame):
-            df_object.to_sql(temp_table
-                         , con=connection[0]
-                         , schema=schemaname
-                         , if_exists='append'
-                         , index=False
-                         , chunksize=10000)
-        else:
-            df_object.to_sql(temp_table
-                         , uri=connection[1]
-                         , schema=schemaname
-                         , if_exists='append'
-                         , index=False
-                         , chunksize=10000)
-
-        if targettableexits:
-            # Insert data from temp table to actual target table
-            insert_statement = "INSERT INTO dbo.{} SELECT * FROM dbo.[{}]".format(table_name, temp_table)
-            conn = engine.connect()
-            conn.execute(
-                sqlalchemy.text(insert_statement))
-            conn.commit()
-            conn.close()
-
-            # Drop temp table is insert was successful
-            drop_table = "DROP TABLE dbo.{}".format(temp_table)
-            conn = engine.connect()
-            conn.execute(
-                sqlalchemy.text(insert_statement))
-            conn.commit()
-            conn.close()
-        print(f"File {file_path} successfully loaded into table {targettablename}")
-        ret_val.append(0)
-    except Exception as e:
-        logging.error('An exception occurred: %s', e)
-        ret_val.append(1)
-        ret_val.append(e)
-
-    return ret_val
 
 # Update status of dataload after writing to target table
-def set_file_processed_status(profile_hk, engine):
+def set_file_processed_status(profile_hk, connection):
     # update file profile status as completed
-    conn = engine.connect()
+    conn = connection[0].connect()
 
     try:
         conn.execute(
@@ -326,18 +272,15 @@ def set_file_processed_status(profile_hk, engine):
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error('An exception occurred: %s', e)
+        logging.error('An exception occurred while trying to update load status: %s', e)
         conn.close()
         
 # Check if given table exists        
-def check_table_exists(targettable, server, database, schema_name, connectiontype, rdms, usr, pwd):
+def check_table_exists(targettable, schema_name, connection):
 
-    connection = getdbconnection(server, database, connectiontype, rdms, usr, pwd)
-    engine = connection[0]
-
-    conn = engine.connect()
+    conn = connection[0].connect()
     tablelist = conn.execute(sqlalchemy.text("SELECT TABLE_NAME "
-                                             "FROM INFORMATION_SCHEMA.TABLES "
+                                             "FROM INFORMATION_SCHEMA.TABLES WITH (NOLOCK)"
                                              "WHERE TABLE_SCHEMA =:schema "
                                              "AND TABLE_NAME=:id"), {'id': targettable,'schema':schema_name}).fetchall()
     conn.close()
@@ -368,12 +311,9 @@ def error_file(file_path, error_path):
     return
 
 # This code will check if file has already been loaded
-def is_file_loaded(file_name, target_table, server, database, connectiontype, rdms, usr, pwd):
+def is_file_loaded(file_name, target_table, connection):
 
-    connection = getdbconnection(server, database, connectiontype, rdms, usr, pwd)
-    engine = connection[0]
-
-    conn = engine.connect()
+    conn = connection[0].connect()
     filelist = conn.execute(sqlalchemy.text("SELECT DISTINCT dataprofilingid "
                                              "FROM _admin.datafilestagelog "
                                              "WHERE filename=:file "
