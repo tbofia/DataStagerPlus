@@ -41,25 +41,110 @@ def getdbconnection(server, database, connectiontype, rdms, usr, pwd):
     return [engine,connectionstring]
 
 # function to compare table shemas and return any differences
-def check_schema_differences(left_table, right_table, table_schema, connection):
-    result = None
-    if check_table_exists(left_table, table_schema, connection) and check_table_exists(right_table, table_schema, connection):
+def check_schema_differences(left_table, right_table, connection):
+    # Query List
+    l1 = []
+    htmlcode = ""
+
+    if check_table_exists(left_table, connection) and check_table_exists(right_table, connection):
         conn = connection[0].connect()
+        # Query to get new columns.
+        newcolumns = sqlalchemy.text("SELECT TL.COLUMN_NAME AS NewColumns "
+                                     "FROM INFORMATION_SCHEMA.COLUMNS TL "
+                                     "LEFT OUTER JOIN INFORMATION_SCHEMA.COLUMNS TR "
+                                     "ON TL.COLUMN_NAME = TR.COLUMN_NAME "
+                                     "AND TR.TABLE_NAME = '{}' "
+                                     "WHERE TL.TABLE_NAME = '{}' "
+                                     "AND TR.COLUMN_NAME IS NULL".format(right_table, left_table))
+        h1 = '<h2>New Columns</h2>'
+        t1 = {"header": h1,
+              "code": newcolumns}
+        l1.append(t1)
+        # Query to get columns missing from new dataset.
+        missingcolumns = sqlalchemy.text("SELECT TL.COLUMN_NAME AS MissingColumns "
+                                         "FROM INFORMATION_SCHEMA.COLUMNS TL "
+                                         "LEFT OUTER JOIN INFORMATION_SCHEMA.COLUMNS TR "
+                                         "ON TL.COLUMN_NAME = TR.COLUMN_NAME "
+                                         "AND TR.TABLE_NAME = '{}' "
+                                         "WHERE TL.TABLE_NAME = '{}' "
+                                         "AND TR.COLUMN_NAME IS NULL".format(left_table, right_table))
+        h1 = '<h2>Missing Columns</h2>'
+        t1 = {"header": h1,
+              "code": missingcolumns}
+        l1.append(t1)
 
-        result = conn.execute(sqlalchemy.text("SELECT A.COlUMN_NAME, A.ORDINAL_POSITION, A.DATA_TYPE "
-                                              "FROM "
-                                              "(SELECT COlUMN_NAME	,ORDINAL_POSITION 	,DATA_TYPE "
-                                              "FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{}') A "
-                                              "LEFT OUTER JOIN "
-                                              "(SELECT COlUMN_NAME	,ORDINAL_POSITION	,DATA_TYPE "
-                                              "FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{}') B "
-                                              "ON A.COLUMN_NAME = B.COLUMN_NAME "
-                                              "AND A.ORDINAL_POSITION = B.ORDINAL_POSITION "
-                                              "AND A.DATA_TYPE = B.DATA_TYPE "
-                                              "WHERE B.COLUMN_NAME IS NULL".format(left_table,
-                                                                                   right_table))).fetchall()
+        # Query to get any data type changes.
+        datatypechanges = sqlalchemy.text(
+            "SELECT TL.COLUMN_NAME AS ColumnName, "
+            "TL.DATA_TYPE AS NewDataType, "
+            "TR.DATA_TYPE AS OldDataType "
+            "FROM INFORMATION_SCHEMA.COLUMNS TL "
+            "INNER JOIN INFORMATION_SCHEMA.COLUMNS TR "
+            "ON TL.COLUMN_NAME = TR.COLUMN_NAME "
+            "AND TR.TABLE_NAME = '{}' "
+            "WHERE TL.TABLE_NAME = '{}' "
+            "AND TR.DATA_TYPE <> TL.DATA_TYPE".format(right_table, left_table))
+        h1 = '<h2>Datatype Changes</h2>'
+        t1 = {"header": h1,
+              "code": datatypechanges}
+        l1.append(t1)
 
-    return result
+        # Query to get column position changes
+        columnpositionchanges = sqlalchemy.text(
+            "SELECT TL.COLUMN_NAME AS ColumnName, "
+            "TL.ORDINAL_POSITION AS NewPosition, "
+            "TR.ORDINAL_POSITION AS OldPosition "
+            "FROM INFORMATION_SCHEMA.COLUMNS TL "
+            "INNER JOIN INFORMATION_SCHEMA.COLUMNS TR "
+            "ON TL.COLUMN_NAME = TR.COLUMN_NAME "
+            "AND TR.TABLE_NAME = '{}' "
+            "WHERE TL.TABLE_NAME = '{}' "
+            "AND TR.ORDINAL_POSITION <> TL.ORDINAL_POSITION".format(right_table, left_table))
+        h1 = '<h2>Column Position Changes</h2>'
+        t1 = {"header": h1,
+              "code": columnpositionchanges}
+        l1.append(t1)
+
+        for le in l1:
+            data = pd.read_sql(le["code"], connection[0])
+            if not data.empty:
+                data = data.to_html(classes='table table-stripped')
+                htmlcode = htmlcode + le["header"] + data
+
+    if htmlcode == "":
+        htmlcode = None
+
+    return htmlcode
+
+# This function splits large file into manageable chunks
+def split_large_file(file_path, folder_name, archive_path):
+    folder_name = folder_name + '/'
+    breakup_size = 160000000  # Number of bytes to read, this should be about 150 MB
+
+    with open(file_path, 'r') as file:
+        # memory-map the file
+        base_file_name = os.path.splitext(os.path.basename(file_path))[0]
+        base_file_ext = os.path.splitext(os.path.basename(file_path))[1]
+        file_lines = file.readlines(breakup_size)
+        i = 0
+        # While we are able to read lines from file
+        while len(file_lines) > 0:
+            if i == 0:  # Get header from first file
+                header_line = file_lines[0]
+            file_name = folder_name + base_file_name + '_' + str(i) + '_' + str(breakup_size) + base_file_ext
+            small_file = open(f'{file_name}', 'a')
+
+            if i > 0:  # Place header for subsequent files
+                small_file.write(header_line)
+
+            small_file.writelines(file_lines)
+            small_file.close()
+
+            file_lines = file.readlines(breakup_size)
+            i += 1
+
+    archive_file(file_path, archive_path)
+    return
 
 # This function tries to figure out delimiter for files by looking at couple of lines
 def usedefaultdelimiter(file_path,supported_delimiters):
