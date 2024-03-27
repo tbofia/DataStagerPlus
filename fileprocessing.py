@@ -51,7 +51,10 @@ def delete_first_and_last_lines(file_path, modified_file):
 
 # This function tries to figure out delimiter for files by looking at couple of lines
 def use_default_delimiter(file_path):
-    default = '\t'
+    delimiter_to_use = '\t'
+    match_found = False
+    base_columns = 0
+
     with open(file_path, 'r') as file:
         sample_lines = file.readlines()[0:5]
 
@@ -62,12 +65,25 @@ def use_default_delimiter(file_path):
         match = 0
         column_count = len(first_line.split(delimiter))
         number_of_lines = len(sample_lines) - 1
-        for line in sample_lines[1:5]:
-            if len(line.split(delimiter)) == column_count:
-                match += 1
-        if match == number_of_lines and column_count > 1:
-            return delimiter
-    return default
+
+        # If we have large enough sample lets find delimiter by using all lines and making sure it is same for all
+        if len(sample_lines) > 2:
+            for line in sample_lines[1:5]:
+                if len(line.split(delimiter)) == column_count:
+                    match += 1
+            if match == number_of_lines and column_count > 1:
+                match_found = True
+                delimiter_to_use = delimiter
+
+        # if we do not have large enough sample, lets pick the delimiter that splits header line into most columns
+        else:
+            if column_count > base_columns:
+                base_columns = column_count
+                delimiter_to_use = delimiter
+
+        if match_found:
+            break
+    return delimiter_to_use
 
 
 def prep_file(config_params, dir_path, file_path, targettable, connection):
@@ -98,12 +114,16 @@ def prep_file(config_params, dir_path, file_path, targettable, connection):
                 with open(temp_file, 'w') as file:
                     file.writelines(lines)
                 with open(temp_file, 'r') as file:
-                    delimiter = str(csv.Sniffer().sniff(file.read()).delimiter)
+                    if len(lines) < 3:
+                        delimiter = use_default_delimiter(file_path)
+                    else:
+                        delimiter = str(csv.Sniffer().sniff(file.read()).delimiter)
 
                 os.remove(temp_file)
 
             except:
-                os.remove(temp_file)
+                if os.path.isfile(temp_file):
+                    os.remove(temp_file)
                 delimiter = use_default_delimiter(file_path)
 
         else:
@@ -266,7 +286,9 @@ def check_table_columns_defined(config_params, targettable, connection):
     result = conn.execute(sqlalchemy.text("SELECT TableName,Delimiter,ColumnName,TableType "
                                           "FROM {}.{} "
                                           "WHERE TableName  = '{}' "
-                                          "ORDER BY Position".format(config_params['log_schema'], config_params['columns_table'], targettable))).fetchall()
+                                          "ORDER BY Position".format(config_params['log_schema'],
+                                                                     config_params['columns_table'],
+                                                                     targettable))).fetchall()
 
     for r in result:
         delimiter = r[1]
@@ -399,7 +421,7 @@ def send_notifications(config_params, error_code, profile_hk, targettable, file_
 
     if error_code in (2, 3):
 
-        temp_table = targettable + '_' + file_name.replace(".", "").replace("-", "")
+        temp_table = targettable + '_' + file_name.replace(".", "").replace("-", "").replace(" ", "")
         # If target table exists and temp table exists check schema diff
         schema_differences = check_schema_differences(temp_table, targettable, connection)
         if schema_differences is not None:
@@ -435,7 +457,8 @@ def update_error_log(config_params, profile_hk, connection):
         conn.execute(
             sqlalchemy.text("UPDATE {}.{} "
                             "SET EmailSent=:sentval  "
-                            "WHERE DataloadXHK=:id".format(config_params['log_schema'], config_params['error_log_table'])),
+                            "WHERE DataloadXHK=:id".format(config_params['log_schema'],
+                                                           config_params['error_log_table'])),
             {'id': profile_hk, 'sentval': True})
         conn.commit()
         conn.close()
@@ -463,7 +486,8 @@ def is_file_loaded(config_params, file_name, targettable, connection):
                                             "FROM {}.{} "
                                             "WHERE filename=:file "
                                             "AND targettablename=:targettable "
-                                            "AND loadsuccessstatus = 1".format(config_params['log_schema'], config_params['log_table'])),
+                                            "AND loadsuccessstatus = 1".format(config_params['log_schema'],
+                                                                               config_params['log_table'])),
                             {'targettable': targettable, 'file': file_name}).fetchall()
     conn.close()
     return len(filelist) > 0
